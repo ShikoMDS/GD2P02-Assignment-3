@@ -1,138 +1,115 @@
+#include <chrono>
 #include <SFML/Graphics.hpp>
-#include <iostream>
+#include <vector>
 #include <cmath>
+#include <random>
 
-// Function to check if the circle is within leniency of the plane
-bool isCircleOnPlaneWithTolerance(const sf::Vector2f& PlanePoint, const sf::Vector2f& Normal,
-                                  const sf::Vector2f& CircleCenter, const float CircleRadius, const float Tolerance)
+constexpr int WindowWidth = 1600;
+constexpr int WindowHeight = 900;
+constexpr int NumGrassBlades = 500;
+constexpr int GrassSegments = 5;
+constexpr float BaseGrassLength = 150.0f;
+constexpr float WindSwayFrequencyBase = 0.2f;  
+constexpr float WindSwayAmplitude = 20.0f;
+constexpr float DampingFactor = 0.7f;  
+
+struct GrassBlade
 {
-	// Vector from the plane point to the circle center
-	const sf::Vector2f Diff = CircleCenter - PlanePoint;
+    std::vector<sf::Vector2f> Segments;
+    float LengthVariance;
+    float PhaseOffset;
+    float FrequencyVariance;  
+};
 
-	// Project the Diff vector onto the plane normal to get the perpendicular distance
-	const float Distance = std::abs(Diff.x * Normal.x + Diff.y * Normal.y) / std::sqrt(
-		Normal.x * Normal.x + Normal.y * Normal.y);
+void initializeGrass(std::vector<GrassBlade>& GrassBlades)
+{
+    // Seed the random number generator with the current time for more randomness
+    std::default_random_engine Generator(static_cast<unsigned>(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::uniform_real_distribution LengthDist(1.0f, 1.3f);
+    std::uniform_real_distribution PhaseDist(0.0f, 3.14f);
+    std::uniform_real_distribution XPosDist(0.0f, static_cast<float>(WindowWidth));
+    std::uniform_real_distribution FrequencyDist(0.8f, 1.2f);  // Variance for swaying frequency
 
-	// If the distance is less than or equal to the circle radius plus tolerance, consider it "on the plane"
-	return Distance <= CircleRadius + Tolerance;
+    for (auto& Blade : GrassBlades)
+    {
+        Blade.LengthVariance = LengthDist(Generator);
+        Blade.PhaseOffset = PhaseDist(Generator);
+        Blade.FrequencyVariance = FrequencyDist(Generator);
+
+        // Initialize the position of the grass blades along the entire width of the window
+        const float StartX = XPosDist(Generator);
+        Blade.Segments.resize(GrassSegments + 1);
+        Blade.Segments[0] = sf::Vector2f(StartX, WindowHeight); // Grass blade base at bottom of the window
+    }
+}
+
+void updateGrass(std::vector<GrassBlade>& GrassBlades, const float Time)
+{
+    for (auto& Blade : GrassBlades)
+    {
+        // Adjust the frequency based on a variance to make blades move uniquely
+        const float EffectiveFrequency = WindSwayFrequencyBase * Blade.FrequencyVariance;
+        const float Sway = std::sin(Time * EffectiveFrequency + Blade.PhaseOffset) * WindSwayAmplitude * DampingFactor;
+
+        for (int I = 1; I <= GrassSegments; ++I)
+        {
+            const float SegmentLength = BaseGrassLength * Blade.LengthVariance / GrassSegments;
+            const float Angle = Sway * (I / static_cast<float>(GrassSegments));
+            Blade.Segments[I] = Blade.Segments[I - 1] + sf::Vector2f(std::sin(Angle) * SegmentLength, -std::cos(Angle) * SegmentLength);
+        }
+    }
+}
+
+void renderGrass(sf::RenderWindow& Window, const std::vector<GrassBlade>& GrassBlades)
+{
+    for (const auto& Blade : GrassBlades)
+    {
+        for (int I = 0; I < GrassSegments; ++I)
+        {
+            const float Thickness = 3.0f - static_cast<float>(I) * 0.4f; // Thicker at the base, thinner towards the tip
+            sf::RectangleShape SegmentLine;
+            SegmentLine.setPosition(Blade.Segments[I]);
+            const sf::Vector2f Direction = Blade.Segments[I + 1] - Blade.Segments[I];
+            const float Length = std::sqrt(Direction.x * Direction.x + Direction.y * Direction.y);
+            SegmentLine.setSize(sf::Vector2f(Length, Thickness));
+            SegmentLine.setRotation(std::atan2(Direction.y, Direction.x) * 180.f / 3.14159265f);
+            SegmentLine.setFillColor(sf::Color(34, 139, 34));
+
+            Window.draw(SegmentLine);
+        }
+    }
 }
 
 int main()
 {
-	sf::RenderWindow Window(sf::VideoMode(1600, 900), "Sub Exercise 001.1 - Plane vs Point Function", sf::Style::Close);
+    sf::RenderWindow Window(sf::VideoMode(WindowWidth, WindowHeight), "Ex 1.1: Grass Simulation", sf::Style::Close);
 
-	bool DrawingLine = false;
-	bool LineDrawn = false;
-	sf::Vector2f Start;
-	sf::Vector2f End;
-	sf::Vector2f Normal;
+    std::vector<GrassBlade> GrassBlades(NumGrassBlades);
+    initializeGrass(GrassBlades);
 
-	constexpr float PlaneThickness = 5.0f; // Reduced thickness for both visual and calculation
-	constexpr float CircleRadius = 5.0f;
-	constexpr float Tolerance = 2.0f; // Leniency for determining "on the plane"
+    sf::Clock Clock;
 
-	// Create the plane as a rectangle shape
-	sf::RectangleShape Plane(sf::Vector2f(0.0f, PlaneThickness));
-	Plane.setFillColor(sf::Color::Blue);
-	Plane.setOrigin(0.0f, PlaneThickness / 2.0f); // Correct the center of the plane
+    while (Window.isOpen())
+    {
+        sf::Event Event{};
+        while (Window.pollEvent(Event))
+        {
+            if (Event.type == sf::Event::Closed)
+            {
+                Window.close();
+            }
+        }
 
-	sf::CircleShape Dot(CircleRadius);
-	Dot.setFillColor(sf::Color::Yellow);
-	bool PointPlaced = false;
+        float ElapsedTime = Clock.getElapsedTime().asSeconds();
 
-	while (Window.isOpen())
-	{
-		sf::Event Event{};
-		while (Window.pollEvent(Event))
-		{
-			// Handle window close event
-			if (Event.type == sf::Event::Closed)
-			{
-				Window.close();
-			}
-			// Handle mouse button press events
-			else if (Event.type == sf::Event::MouseButtonPressed)
-			{
-				if (Event.mouseButton.button == sf::Mouse::Left)
-				{
-					// Start drawing the line on left-click
-					DrawingLine = true;
-					Start = Window.mapPixelToCoords(sf::Mouse::getPosition(Window));
-					Plane.setPosition(Start);
-				}
-				else if (Event.mouseButton.button == sf::Mouse::Right && LineDrawn)
-				{
-					// Place the point (circle shape) on right-click
-					sf::Vector2f CircleCenter = Window.mapPixelToCoords(sf::Mouse::getPosition(Window));
-					Dot.setPosition(CircleCenter.x - CircleRadius, CircleCenter.y - CircleRadius);
-					// Adjust for circle origin
-					PointPlaced = true;
+        // Update grass animation based on elapsed time
+        updateGrass(GrassBlades, ElapsedTime);
 
-					// Check if the circle is "on the plane" with tolerance
-					if (isCircleOnPlaneWithTolerance(Start, Normal, CircleCenter, CircleRadius, Tolerance))
-					{
-						std::cout << "Point is: On Plane" << '\n';
-					}
-					else
-					{
-						float DotProduct = (CircleCenter.x - Start.x) * Normal.x + (CircleCenter.y - Start.y) * Normal.
-							y;
-						std::cout << "Point is: " << (DotProduct > 0 ? "In Front" : "Behind") << '\n';
-					}
-				}
-			}
-			// Handle mouse button release event
-			else if (Event.type == sf::Event::MouseButtonReleased)
-			{
-				if (Event.mouseButton.button == sf::Mouse::Left && DrawingLine)
-				{
-					// Finish drawing the line on release
-					DrawingLine = false;
-					LineDrawn = true;
-					End = Window.mapPixelToCoords(sf::Mouse::getPosition(Window));
+        // Render everything
+        Window.clear(sf::Color::Cyan);
+        renderGrass(Window, GrassBlades);
+        Window.display();
+    }
 
-					// Calculate the normal vector for the plane
-					Normal = sf::Vector2f(End.y - Start.y, Start.x - End.x);
-
-					// Set the plane length and rotation
-					float Length = std::sqrt(std::pow(End.x - Start.x, 2.0f) + std::pow(End.y - Start.y, 2.0f));
-					Plane.setSize(sf::Vector2f(Length, PlaneThickness));
-					float Angle = std::atan2(End.y - Start.y, End.x - Start.x) * 180.0f / 3.14159265f;
-					Plane.setRotation(Angle);
-				}
-			}
-			// Handle mouse movement event
-			else if (Event.type == sf::Event::MouseMoved)
-			{
-				if (DrawingLine)
-				{
-					// Update the line's end point while drawing
-					sf::Vector2f CurrentPos = Window.mapPixelToCoords(sf::Mouse::getPosition(Window));
-					float Length = std::sqrt(
-						std::pow(CurrentPos.x - Start.x, 2.0f) + std::pow(CurrentPos.y - Start.y, 2.0f));
-					Plane.setSize(sf::Vector2f(Length, PlaneThickness));
-					float Angle = std::atan2(CurrentPos.y - Start.y, CurrentPos.x - Start.x) * 180.0f / 3.14159265f;
-					Plane.setRotation(Angle);
-				}
-			}
-		}
-
-		Window.clear();
-
-		// Draw the plane line if it is being drawn or has been drawn
-		if (DrawingLine || LineDrawn)
-		{
-			Window.draw(Plane);
-		}
-
-		// Draw the point (circle) if it has been placed
-		if (PointPlaced)
-		{
-			Window.draw(Dot);
-		}
-
-		Window.display();
-	}
-
-	return 0;
+    return 0;
 }
